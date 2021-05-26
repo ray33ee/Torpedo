@@ -1,6 +1,6 @@
 [package]
 name = "torpedo"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["ray33ee <30669752+ray33ee@users.noreply.github.com>"]
 edition = "2018"
 
@@ -15,3 +15,6 @@ chrono = "0.4.19"
 serde_repr = "0.1.6"
 torserde_macros = { path = "E:\\Software Projects\\IntelliJ\\torserde_macros" }
 torserde = { path = "E:\\Software Projects\\IntelliJ\\torserde" }
+ctr = "0.7.0"
+aes = "0.7.2"
+sha-1 = "0.9.6"
