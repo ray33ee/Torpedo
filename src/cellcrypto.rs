@@ -3,8 +3,10 @@ use sha1::Sha1;
 use sha1::Digest;
 use std::io::Write;
 
-use ctr::cipher::{NewCipher, StreamCipher, StreamCipherSeek};
+use ctr::cipher::{NewCipher, StreamCipher};
 use std::convert::TryInto;
+use crate::cells::{RelayCell, Encrypted};
+use torserde::TorSerde;
 
 type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 
@@ -31,14 +33,16 @@ impl CellCrypto {
         let mut forward_digest = Sha1::new();
         let mut backward_digest = Sha1::new();
 
-        forward_digest.write(f_digest);
-        backward_digest.write(b_digest);
+        forward_digest.write(f_digest).unwrap();
+        backward_digest.write(b_digest).unwrap();
 
         //Tor uses an inialisation vector of all zeros in its SHA1 hashes
         let iv = 0u128.to_be_bytes();
 
         let forward_encryptor = Aes128Ctr::new(f_key.into(), iv.as_ref().into());
         let backward_decryptor = Aes128Ctr::new(b_key.into(), iv.as_ref().into());
+
+        println!("fkey: {:?}", f_key);
 
         Self {
             forward_digest,
@@ -49,40 +53,58 @@ impl CellCrypto {
 
     }
 
-    pub fn set_forward_digest(& mut self, data: & mut [u8]) {
-        self.forward_digest.write(data);
+    pub fn set_forward_digest(& mut self, relay: & mut RelayCell) {
+
+        relay.bin_serialise_into(& mut self.forward_digest);
 
         let clone = self.forward_digest.clone();
 
         let digest = clone.finalize();
 
-        for (i, byte) in (&digest[0..4]).iter().enumerate() {
-            data[5+i] = *byte;
-        }
+        relay.set_digest(u32::from_be_bytes(digest[0..4].try_into().unwrap()));
     }
 
-    pub fn verify_backward_digest(& mut self, data: & mut [u8]) -> bool {
+    pub fn verify_backward_digest(& mut self, relay: & mut RelayCell) -> bool {
 
-        let sent_digest = u32::from_be_bytes((&data[5..9]).try_into().unwrap());
+        let sent_digest = relay.get_digest();
 
-        for byte in & mut data[5..9] {
-            *byte = 0;
-        }
+        relay.set_digest(0);
 
-        self.backward_digest.write(data);
+        let mut test = [0u8; 509];
+
+        relay.bin_serialise_into(test.as_mut());
+
+        println!("test@ {:?}", test);
+
+        relay.bin_serialise_into(& mut self.backward_digest);
 
         let clone = self.backward_digest.clone();
 
         let calculated_digest = u32::from_be_bytes((&clone.finalize()[0..4]).try_into().unwrap());
 
+        println!("calculated: {}", calculated_digest);
+
         sent_digest == calculated_digest
     }
 
-    pub fn encrypt(& mut self, data: & mut [u8]) {
-        self.forward_encryptor.apply_keystream(data);
+    pub fn encrypt(& mut self, relay: RelayCell) -> Encrypted {
+
+        let mut array = [0u8; 509];
+
+        relay.bin_serialise_into(array.as_mut());
+
+        self.forward_encryptor.apply_keystream(array.as_mut());
+
+        Encrypted(array)
+
     }
 
-    pub fn decrypt(& mut self, data: & mut [u8]) {
-        self.backward_decryptor.apply_keystream(data);
+    pub fn decrypt(& mut self, relay: Encrypted) -> RelayCell {
+
+        let mut array = relay.0;
+
+        self.backward_decryptor.apply_keystream(array.as_mut());
+
+        RelayCell::bin_deserialise_from(array.as_ref())
     }
 }

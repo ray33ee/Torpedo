@@ -4,7 +4,7 @@
 mod macro_tests {
 
     use torserde_macros::Torserde;
-    use torserde::{TorSerde, NLengthVector, VersionsVector};
+    use torserde::{TorSerde, NLengthVector};
     use std::net::Ipv4Addr;
 
     #[derive(Torserde, PartialEq, Eq, Debug)]

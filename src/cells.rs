@@ -1,11 +1,18 @@
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr};
 use chrono::{DateTime, Local};
 
 use torserde_macros::Torserde;
 use torserde::{TorSerde, NLengthVector, VersionsVector};
 use std::io::{Read, Write};
-use std::borrow::BorrowMut;
+use std::borrow::{BorrowMut};
+
+use lazy_static::lazy_static;
+use ring::rand::SecureRandom;
+
+lazy_static!{
+    static ref CSRNG: ring::rand::SystemRandom = ring::rand::SystemRandom::new();
+}
 
 #[derive(Debug, Clone, Torserde)]
 pub struct Cert {
@@ -18,6 +25,17 @@ pub struct LinkSpecifier {
     ltype: u8,
     lspec: NLengthVector<u8, 1>
 }
+
+#[derive(Debug, Clone, Torserde)]
+#[repr(u8)]
+pub enum SendMePayload {
+    Ignore = 0,
+    Authenticated { length: u16, digest: [u8; 20] } = 1,
+}
+
+//Represents the payload of an encrypted cell
+#[derive(Debug, Clone, Torserde)]
+pub struct Encrypted(pub [u8; 509]);
 
 #[derive(Debug, Clone, Torserde)]
 #[repr(u8)]
@@ -64,7 +82,7 @@ pub enum Relay {
     Data{ data: [u8; 498] } = 2, //DOne - Be careful with this as moving [u8; 498] is expensive
     End{ end_reason: EndReason } = 3, //Done
     Connected { ip: Ipv4Addr, ttl: u32 } = 4, //Done
-    SendMe { version: u8, digest: NLengthVector<u8, 2> } = 5, //Done
+    SendMe { payload: SendMePayload } = 5, //Done
 
     Truncated{ reason: DestroyReason } = 9, //Done
 
@@ -80,38 +98,17 @@ pub enum Relay {
 
 #[derive(Debug, Clone, Torserde)]
 #[repr(u8)]
-pub enum RelayCommand {
-    Begin = 1, //Done
-    Data = 2, //DOne - Be careful with this as moving [u8; 498] is expensive
-    End = 3, //Done
-    Connected = 4, //Done
-    SendMe = 5, //Done
-
-    Truncated = 9, //Done
-
-    BeginDir = 13,
-    Extend2 = 14, //What is a link specifier?
-    Extended2 = 15, //Done
-    EstablishRendezvous = 33, //Done
-    Introduce1 = 34, //Need to do this one
-    // Rendezvous2{ handshake_data: & 'a [u8] } = 37, // Length?
-    RendezvousEstablished = 39,
-    IntroduceAck = 40,
-}
-
-#[derive(Debug, Clone, Torserde)]
-#[repr(u8)]
 pub enum Command {
     /* Fixed length commands */
     Padding = 0,
     Create{ onion_skin: [u8; 20] } = 1, //Done
     //Created = 2,
-    Relay{ send_relay: Relay, stream_id: u16, padding: NLengthVector<IpAddr, 1>, encrypted: u32 } = 3, //Figure out padding and encryption
+    Relay{ contents: Encrypted } = 3, //Figure out padding and encryption
     Destroy{ reason: DestroyReason } = 4, //Done
     CreateFast{ onion_skin: [u8; 20] } = 5, //Done
     CreatedFast{ handshake_data: [u8; 40] } = 6, //Done
     NetInfo{ timestamp: DateTime<Local>, other_ip: IpAddr, this_ips: NLengthVector<IpAddr, 1> } = 8, //Done
-    RelayEarly{ send_relay: Relay, stream_id: u16, padding: NLengthVector<IpAddr, 1>, encrypted: u32 } = 9, //Figure out padding and encryption
+    RelayEarly{ contents: Encrypted } = 9, //Figure out padding and encryption
     Create2{ handshake_type: u16, onion_skin: NLengthVector<u8, 2> } = 10, //Done
     Created2{ handshake_data: NLengthVector<u8, 2> } = 11, //Done
 
@@ -126,33 +123,124 @@ pub enum Command {
 
 #[derive(Debug, Clone)]
 pub struct RelayCell {
-    relay_command: RelayCommand,
+    command: u8,
     recognised: u16,
     stream_id: u16,
     digest: u32,
     data: NLengthVector<u8, 2>,
-    //padding: Vec<u8>, //We do not include padding as it is automatically generated (for sent cells) and consumed (for received cells)
+    padding: Option<Vec<u8>>,
 
 
 }
 
-impl RelayCell {
+impl TorSerde for RelayCell {
+    fn bin_serialise_into<W: Write>(&self, mut stream: W) -> u32 {
+        self.command.bin_serialise_into(stream.borrow_mut());
+        self.recognised.bin_serialise_into(stream.borrow_mut());
 
-    fn new(relay_command: RelayCommand, data: Vec<u8>, stream_id: u16) -> Self {
-        let data = NLengthVector::from(data);
+        self.stream_id.bin_serialise_into(stream.borrow_mut());
+
+        self.digest.bin_serialise_into(stream.borrow_mut());
+
+        self.data.bin_serialise_into(stream.borrow_mut());
+
+        std::io::copy(& mut (&self.padding.as_ref().unwrap()[..]), stream.borrow_mut()).unwrap();
+
+        509
+    }
+
+    fn bin_deserialise_from<R: Read>(mut stream: R) -> Self {
+        let command = u8::bin_deserialise_from(stream.borrow_mut());
+        let recognised = u16::bin_deserialise_from(stream.borrow_mut());
+        let stream_id = u16::bin_deserialise_from(stream.borrow_mut());
+        let digest = u32::bin_deserialise_from(stream.borrow_mut());
+        let data = <NLengthVector<u8, 2>>::bin_deserialise_from(stream.borrow_mut());
+
+        let mut taken = stream.borrow_mut().take((509 - 11 - data.0.len()) as u64);
+
+        let mut padding = Vec::new();
+
+        taken.read_to_end(& mut padding).unwrap();
+
+        let padding = Some(padding);
 
         Self {
-            relay_command,
-            recognised: 0,
+            command,
+            recognised,
             stream_id,
-            digest: 0,
+            digest,
             data,
+            padding,
         }
     }
 
-    fn set_digest(&mut self, digest: u32) {
+    fn serialised_length(&self) -> u32 {
+        509
+    }
+}
+
+impl RelayCell {
+
+    pub fn new(stream_id: u16, contents: Relay) -> Self {
+        let recognised = 0;
+        let digest = 0;
+        let (command, data) = Self::get_vector(contents);
+
+        let mut padding: Vec<_> = (0..509-11-data.0.len()).into_iter().map(|_| 0u8).collect();
+
+        CSRNG.fill(& mut padding).unwrap();
+
+        let padding = Some(padding);
+
+        Self {
+            command,
+            recognised,
+            stream_id,
+            digest,
+            data,
+            padding,
+        }
+    }
+
+    pub fn set_digest(& mut self, digest: u32) {
         self.digest = digest;
     }
+
+    pub fn get_digest(& self) -> u32 {
+        self.digest
+    }
+
+    fn get_vector(relay: Relay) -> (u8, NLengthVector<u8, 2>) {
+        let mut data = Vec::new();
+        //Todo: Create a special object that implements write, that returns the discriminant followed by the data without having to remove from a vector
+
+        relay.bin_serialise_into(& mut data);
+
+        let command = data.remove(0);
+
+        (command, NLengthVector::from(data))
+    }
+
+    fn get_relay(&self) -> Option<Relay> {
+
+        if self.data.0.is_empty() {
+            None
+        } else {
+            let mut data = self.data.0.clone();
+
+            data.insert(0, self.command);
+
+            //Todo: Create a special object that implements read, that returns the discriminant followed by the data without having to prepend a vector
+
+            //Now data contains a discriminant followed by a list of data.
+            //This is exactly what we need to describe an enum
+
+            Some(Relay::bin_deserialise_from(data.as_slice()))
+        }
+
+    }
+
+
 
 }
 
@@ -211,15 +299,13 @@ impl<'a> TorCell {
         let payload = Command::bin_deserialise_from(stream.borrow_mut());
 
         //If it's a fixed length command, we need to flush any padding from the stream
-        let pad_length = if !payload.is_var_len() {
+        if !payload.is_var_len() {
             let payload_length = payload.serialised_length() - 1; //Subtract one because the serialised length includes the payload AND the discriminant (which is one byte)
 
             let mut taken = stream.borrow_mut().take((509 - payload_length) as u64);
 
             std::io::copy(& mut taken, & mut NullReader);
-        };
-
-
+        }
 
         Self {
             circuit_id,
@@ -229,9 +315,9 @@ impl<'a> TorCell {
 
     pub fn into_stream<W: Write>(self, mut stream: W, version: u32) {
         if version < 4 {
-            (self.circuit_id as u16).bin_serialise_into(stream.borrow_mut())
+            (self.circuit_id as u16).bin_serialise_into(stream.borrow_mut());
         } else {
-            (self.circuit_id as u32).bin_serialise_into(stream.borrow_mut())
+            (self.circuit_id as u32).bin_serialise_into(stream.borrow_mut());
         }
 
         self.payload.bin_serialise_into(stream.borrow_mut()); //Subtract one since out payload includes the command byte

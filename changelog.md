@@ -10,30 +10,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Make sure that cell serialisation is fast. 
   - Add benchmarks to macro_tests.rs tests
-- Make sure inner cells are padded correctly so they fit in normal cells
 - Make sure we ignore padding in variable length cells too
-- Convert the directory authority list and fallback mirror list into rust code at compile time
-- Make sure we ignore AND flush padding wer don't use
-- Also make sure we add padding where needed
 - Only fetch a new consensus/router data if expired. Otherwise try to use cached data
 - Don't keep allocating memory (via Vec) try to use one global Vec and reuse it for multiple cells
+- Make sure we correctly handle invalid discriminants (instead of panicking)
+  - Cells with an invalid command are ignored
+  - An Invalid SendMePayload enum should result in a tear down of the circuit
+  - Return Result when deserialising
+- Add a build configuration in Torpedo (as part of test) to call mirror_mirror to generate source
 
 #### torserde_macros
 - Clean up macro code, create functions for repeated code
 - Modify macro to use the `repr` attribute and serialise the discriminant accordingly (as u8, u16, etc.)
 - Figure out why `Command` needs Debug, Clone, == and != traits
 - Modify the struct macro to allow customisation
-  - The user creates a struct, then derives Torserde
+  - The user creates a struct, then derives Torserde with custom arguments describing how to serialise
     - Deriving torserde requires the user to specify the order that the fields will be serialised
     - For vectors the user must specify the size of the length data (u8, u16 or u32)
-    - For enums the determinant and data are sent separately (determinent must be sent first)
+    - For enums the determinant and data are sent separately (determinant must be sent first)
     - The size of the determinant is also customisable
+    - Specifying the order of serialisation should be optional (if it's not specified, use the order that the fields appear in the struct definition)
 
 #### Torserde
 - Rename `NLengthVector` to something less confusing
 
 ### Unfinished Ideas
 None
+
+## [0.1.3] - 2021-05-26
+### Added
+- Python script created that converts mirror and directory list into Rust code
+- Relay cells implemented
+  - Relay cells contain an `Encrypted` struct which mark the payload as ready for decryption and verification
+  - The payload of a decrypted cell is essentially an Option, as cells that should have a payload but have a length of zero are represented as None
+  - Cellcrypto modified to work with Cells and Encrypted structs instead of buffers
+  - Relay cells are padded with random bytes
+  - By default, the command and payload are not contiguous for relay cells. We join them together to ensure they can be serialised/deserialised with Torserde
+  - Padding is stored in `RelayCell` so it can be used to calculate the rolling digest
+- SendMePayload added
+- We use the `ring` CSPRNG to generate random padding 
+- Various warnings cleared
+
+### Removed
+- RelayCommand enum removed as no longer needed
 
 ## [0.1.2] - 2021-05-26
 ### Added

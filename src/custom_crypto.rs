@@ -2,7 +2,6 @@
 use sha1::Sha1;
 use sha1::Digest;
 use std::io::Write;
-use std::ptr::hash;
 use sha1::digest::Reset;
 
 pub fn kdf_tor(shared_secret: &[u8]) -> Vec<u8> {
@@ -12,8 +11,8 @@ pub fn kdf_tor(shared_secret: &[u8]) -> Vec<u8> {
 
     for i in 0..5 {
 
-        hasher.write(shared_secret);
-        hasher.write(&[i]);
+        hasher.write(shared_secret).unwrap();
+        hasher.write(&[i]).unwrap();
 
         key_stuff.extend_from_slice(&hasher.clone().finalize());
         Reset::reset(&mut hasher);

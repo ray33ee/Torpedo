@@ -7,3 +7,4 @@ mod macro_tests;
 mod cells;
 mod cellcrypto;
 mod custom_crypto;
+mod directories;
