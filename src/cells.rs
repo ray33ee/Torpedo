@@ -134,44 +134,44 @@ pub struct RelayCell {
 }
 
 impl TorSerde for RelayCell {
-    fn bin_serialise_into<W: Write>(&self, mut stream: W) -> u32 {
-        self.command.bin_serialise_into(stream.borrow_mut());
-        self.recognised.bin_serialise_into(stream.borrow_mut());
+    fn bin_serialise_into<W: Write>(&self, mut stream: W) -> torserde::Result<u32> {
+        self.command.bin_serialise_into(stream.borrow_mut())?;
+        self.recognised.bin_serialise_into(stream.borrow_mut())?;
 
-        self.stream_id.bin_serialise_into(stream.borrow_mut());
+        self.stream_id.bin_serialise_into(stream.borrow_mut())?;
 
-        self.digest.bin_serialise_into(stream.borrow_mut());
+        self.digest.bin_serialise_into(stream.borrow_mut())?;
 
-        self.data.bin_serialise_into(stream.borrow_mut());
+        self.data.bin_serialise_into(stream.borrow_mut())?;
 
-        std::io::copy(& mut (&self.padding.as_ref().unwrap()[..]), stream.borrow_mut()).unwrap();
+        std::io::copy(& mut (&self.padding.as_ref().unwrap()[..]), stream.borrow_mut())?;
 
-        509
+        Ok(509)
     }
 
-    fn bin_deserialise_from<R: Read>(mut stream: R) -> Self {
-        let command = u8::bin_deserialise_from(stream.borrow_mut());
-        let recognised = u16::bin_deserialise_from(stream.borrow_mut());
-        let stream_id = u16::bin_deserialise_from(stream.borrow_mut());
-        let digest = u32::bin_deserialise_from(stream.borrow_mut());
-        let data = <NLengthVector<u8, 2>>::bin_deserialise_from(stream.borrow_mut());
+    fn bin_deserialise_from<R: Read>(mut stream: R) -> torserde::Result<Self> {
+        let command = u8::bin_deserialise_from(stream.borrow_mut())?;
+        let recognised = u16::bin_deserialise_from(stream.borrow_mut())?;
+        let stream_id = u16::bin_deserialise_from(stream.borrow_mut())?;
+        let digest = u32::bin_deserialise_from(stream.borrow_mut())?;
+        let data = <NLengthVector<u8, 2>>::bin_deserialise_from(stream.borrow_mut())?;
 
         let mut taken = stream.borrow_mut().take((509 - 11 - data.0.len()) as u64);
 
         let mut padding = Vec::new();
 
-        taken.read_to_end(& mut padding).unwrap();
+        taken.read_to_end(& mut padding)?;
 
         let padding = Some(padding);
 
-        Self {
+        Ok(Self {
             command,
             recognised,
             stream_id,
             digest,
             data,
             padding,
-        }
+        })
     }
 
     fn serialised_length(&self) -> u32 {
@@ -221,10 +221,10 @@ impl RelayCell {
         (command, NLengthVector::from(data))
     }
 
-    fn get_relay(&self) -> Option<Relay> {
+    pub fn get_payload(&self) -> torserde::Result<Option<Relay>> {
 
         if self.data.0.is_empty() {
-            None
+            Ok(None)
         } else {
             let mut data = self.data.0.clone();
 
@@ -235,7 +235,7 @@ impl RelayCell {
             //Now data contains a discriminant followed by a list of data.
             //This is exactly what we need to describe an enum
 
-            Some(Relay::bin_deserialise_from(data.as_slice()))
+            Ok(Some(Relay::bin_deserialise_from(data.as_slice())?))
         }
 
     }
@@ -246,13 +246,19 @@ impl RelayCell {
 
 impl Command {
 
-    fn is_var_len(&self) -> bool {
+    fn get_var_len(&self) -> Option<u32> {
+
         match &self {
-            Command::Versions { .. } => { true }
-            Command::Certs { .. } => { true }
-            Command::AuthChallenge { .. } => { true}
-            _ => { false }
+            Command::Versions { version_list } => { Some((version_list.0.len()*2) as u32) }
+            Command::Certs { length, certs: _ } => { Some(*length as u32) }
+            Command::AuthChallenge { length, challenge: _, methods: _ } => { Some(*length as u32) }
+            _ => { None }
         }
+
+    }
+
+    fn is_var_len(&self) -> bool {
+        self.get_var_len().is_some()
     }
 
 
@@ -289,44 +295,55 @@ impl<'a> TorCell {
         &self.payload
     }
 
-    pub fn from_stream<R: Read>(mut stream: R, version: u32) -> Self {
+    pub fn from_stream<R: Read>(mut stream: R, version: u32) -> torserde::Result<Self> {
         let circuit_id = if version < 4 {
-            u16::bin_deserialise_from(stream.borrow_mut()) as u32
+            u16::bin_deserialise_from(stream.borrow_mut())? as u32
         } else {
-            u32::bin_deserialise_from(stream.borrow_mut())
+            u32::bin_deserialise_from(stream.borrow_mut())?
         };
 
-        let payload = Command::bin_deserialise_from(stream.borrow_mut());
+        //Deserialise the command, then use that to get the rest of the cell into a buffer, then deserialise the buffer
+        //This means that even if a deserialisation stops mid way, we still have removed the cell from the stream
 
-        //If it's a fixed length command, we need to flush any padding from the stream
-        if !payload.is_var_len() {
-            let payload_length = payload.serialised_length() - 1; //Subtract one because the serialised length includes the payload AND the discriminant (which is one byte)
+        let payload = Command::bin_deserialise_from(stream.borrow_mut())?;
 
-            let mut taken = stream.borrow_mut().take((509 - payload_length) as u64);
+        let padding_length =  if let Some(length) = payload.get_var_len() {
+            if length > payload.serialised_length() - 1 {
+                length - (payload.serialised_length() - 1)
+            } else {
+                0
+            }
+        } else {
+            509 - (payload.serialised_length() - 1)
+        };
 
-            std::io::copy(& mut taken, & mut NullReader);
-        }
+        let mut taken = stream.borrow_mut().take(padding_length as u64);
 
-        Self {
+        std::io::copy(& mut taken, & mut NullReader);
+
+
+        Ok(Self {
             circuit_id,
             payload
-        }
+        })
     }
 
-    pub fn into_stream<W: Write>(self, mut stream: W, version: u32) {
+    pub fn into_stream<W: Write>(self, mut stream: W, version: u32) -> torserde::Result<()> {
         if version < 4 {
-            (self.circuit_id as u16).bin_serialise_into(stream.borrow_mut());
+            (self.circuit_id as u16).bin_serialise_into(stream.borrow_mut())?;
         } else {
-            (self.circuit_id as u32).bin_serialise_into(stream.borrow_mut());
+            (self.circuit_id as u32).bin_serialise_into(stream.borrow_mut())?;
         }
 
-        self.payload.bin_serialise_into(stream.borrow_mut()); //Subtract one since out payload includes the command byte
+        self.payload.bin_serialise_into(stream.borrow_mut())?; //Subtract one since out payload includes the command byte
 
         if !self.payload.is_var_len() {
             for _ in 0..(510-self.payload.serialised_length()) {
-                0u8.bin_serialise_into(stream.borrow_mut());
+                0u8.bin_serialise_into(stream.borrow_mut())?;
             }
         }
+
+        Ok(())
 
     }
 

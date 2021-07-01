@@ -49,7 +49,7 @@ mod macro_tests {
                     0, 0, 0, 5,
                     0, 0, 0, 6];
 
-        let outer = OuterList::bin_deserialise_from(buff.as_slice());
+        let outer = OuterList::bin_deserialise_from(buff.as_slice()).unwrap();
 
         println!("outer: {:?}", outer);
     }
@@ -60,11 +60,11 @@ mod macro_tests {
 
         let simple_struct = SimpleStruct{ x: 0xf2795e6d, y: 0x4e9237a7 };
 
-        simple_struct.bin_serialise_into(& mut buf);
+        simple_struct.bin_serialise_into(& mut buf).unwrap();
 
         assert_eq!(buf, vec![0xf2, 0x79, 0x5e, 0x6d, 0x4e, 0x92, 0x37, 0xa7]);
 
-        let d_simple_struct = SimpleStruct::bin_deserialise_from(buf.as_slice());
+        let d_simple_struct = SimpleStruct::bin_deserialise_from(buf.as_slice()).unwrap();
 
         assert_eq!(simple_struct, d_simple_struct);
 
@@ -73,3 +73,4 @@ mod macro_tests {
     }
 
 }
+

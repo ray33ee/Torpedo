@@ -8,34 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 #### Torpedo
 
-- Make sure that cell serialisation is fast. 
-  - Add benchmarks to macro_tests.rs tests
-- Make sure we ignore padding in variable length cells too
 - Only fetch a new consensus/router data if expired. Otherwise try to use cached data
 - Don't keep allocating memory (via Vec) try to use one global Vec and reuse it for multiple cells
-- Make sure we correctly handle invalid discriminants (instead of panicking)
-  - Cells with an invalid command are ignored
-  - An Invalid SendMePayload enum should result in a tear down of the circuit
-  - Return Result when deserialising
-- Add a build configuration in Torpedo (as part of test) to call mirror_mirror to generate source
 
 #### torserde_macros
 - Clean up macro code, create functions for repeated code
 - Modify macro to use the `repr` attribute and serialise the discriminant accordingly (as u8, u16, etc.)
 - Figure out why `Command` needs Debug, Clone, == and != traits
-- Modify the struct macro to allow customisation
-  - The user creates a struct, then derives Torserde with custom arguments describing how to serialise
-    - Deriving torserde requires the user to specify the order that the fields will be serialised
-    - For vectors the user must specify the size of the length data (u8, u16 or u32)
-    - For enums the determinant and data are sent separately (determinant must be sent first)
-    - The size of the determinant is also customisable
-    - Specifying the order of serialisation should be optional (if it's not specified, use the order that the fields appear in the struct definition)
 
 #### Torserde
 - Rename `NLengthVector` to something less confusing
 
 ### Unfinished Ideas
 None
+
+## [0.1.4] - 2021-06-16
+### Added
+- We now flush padding for variable length cells too
+- `torserde::ErrorKind` added to encapsulate Torserde-specific errors (like bad digest, invalid command, etc.) and generic errors from `std::io` and `bincode`  
+- Torserde trait now returns `torserde::Result` for serialize and deserialize which uses the `torserde::ErrorKind` enum
+- The return value from serialisation (i.e. the running total number of bytes serialised) now includes the discriminant for enums
+- Support for `torserde::Result` in macros and in `CellCrypto`
 
 ## [0.1.3] - 2021-05-26
 ### Added

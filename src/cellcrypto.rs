@@ -53,18 +53,20 @@ impl CellCrypto {
 
     }
 
-    pub fn set_forward_digest(& mut self, relay: & mut RelayCell) {
+    pub fn set_forward_digest(& mut self, relay: & mut RelayCell) -> torserde::Result<()> {
 
-        relay.bin_serialise_into(& mut self.forward_digest);
+        relay.bin_serialise_into(& mut self.forward_digest)?;
 
         let clone = self.forward_digest.clone();
 
         let digest = clone.finalize();
 
         relay.set_digest(u32::from_be_bytes(digest[0..4].try_into().unwrap()));
+
+        Ok(())
     }
 
-    pub fn verify_backward_digest(& mut self, relay: & mut RelayCell) -> bool {
+    pub fn verify_backward_digest(& mut self, relay: & mut RelayCell) -> torserde::Result<()> {
 
         let sent_digest = relay.get_digest();
 
@@ -72,11 +74,11 @@ impl CellCrypto {
 
         let mut test = [0u8; 509];
 
-        relay.bin_serialise_into(test.as_mut());
+        relay.bin_serialise_into(test.as_mut())?;
 
         println!("test@ {:?}", test);
 
-        relay.bin_serialise_into(& mut self.backward_digest);
+        relay.bin_serialise_into(& mut self.backward_digest)?;
 
         let clone = self.backward_digest.clone();
 
@@ -84,22 +86,26 @@ impl CellCrypto {
 
         println!("calculated: {}", calculated_digest);
 
-        sent_digest == calculated_digest
+        if sent_digest != calculated_digest {
+            return Err(torserde::ErrorKind::BadDigest(sent_digest, calculated_digest));
+        }
+
+        Ok(())
     }
 
-    pub fn encrypt(& mut self, relay: RelayCell) -> Encrypted {
+    pub fn encrypt(& mut self, relay: RelayCell) -> torserde::Result<Encrypted> {
 
         let mut array = [0u8; 509];
 
-        relay.bin_serialise_into(array.as_mut());
+        relay.bin_serialise_into(array.as_mut())?;
 
         self.forward_encryptor.apply_keystream(array.as_mut());
 
-        Encrypted(array)
+        Ok(Encrypted(array))
 
     }
 
-    pub fn decrypt(& mut self, relay: Encrypted) -> RelayCell {
+    pub fn decrypt(& mut self, relay: Encrypted) -> torserde::Result<RelayCell> {
 
         let mut array = relay.0;
 
