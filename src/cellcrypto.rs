@@ -72,12 +72,6 @@ impl CellCrypto {
 
         relay.set_digest(0);
 
-        let mut test = [0u8; 509];
-
-        relay.bin_serialise_into(test.as_mut())?;
-
-        println!("test@ {:?}", test);
-
         relay.bin_serialise_into(& mut self.backward_digest)?;
 
         let clone = self.backward_digest.clone();
@@ -105,7 +99,7 @@ impl CellCrypto {
 
     }
 
-    pub fn decrypt(& mut self, relay: Encrypted) -> torserde::Result<RelayCell> {
+    pub fn decrypt(& mut self, relay: & Encrypted) -> torserde::Result<RelayCell> {
 
         let mut array = relay.0;
 

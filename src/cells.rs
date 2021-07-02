@@ -10,23 +10,25 @@ use std::borrow::{BorrowMut};
 use lazy_static::lazy_static;
 use ring::rand::SecureRandom;
 
+use crate::misc::UnpackedCell;
+
 lazy_static!{
     static ref CSRNG: ring::rand::SystemRandom = ring::rand::SystemRandom::new();
 }
 
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 pub struct Cert {
     cert_type: u8,
     certificate: NLengthVector<u8, 2>,
 }
 
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 pub struct LinkSpecifier {
     ltype: u8,
     lspec: NLengthVector<u8, 1>
 }
 
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 #[repr(u8)]
 pub enum SendMePayload {
     Ignore = 0,
@@ -34,10 +36,10 @@ pub enum SendMePayload {
 }
 
 //Represents the payload of an encrypted cell
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 pub struct Encrypted(pub [u8; 509]);
 
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 #[repr(u8)]
 pub enum EndReason {
     Misc = 1,
@@ -56,7 +58,7 @@ pub enum EndReason {
     NotDirectory = 14,
 }
 
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 #[repr(u8)]
 pub enum DestroyReason {
     None = 0,
@@ -75,7 +77,7 @@ pub enum DestroyReason {
 
 }
 
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 #[repr(u8)]
 pub enum Relay {
     Begin{ addr_and_port: String, flags: u32 } = 1, //Done
@@ -96,7 +98,7 @@ pub enum Relay {
     IntroduceAck = 40,
 }
 
-#[derive(Debug, Clone, Torserde)]
+#[derive(Debug, Torserde)]
 #[repr(u8)]
 pub enum Command {
     /* Fixed length commands */
@@ -121,7 +123,7 @@ pub enum Command {
     //Authorize = 132,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RelayCell {
     command: u8,
     recognised: u16,
@@ -135,16 +137,23 @@ pub struct RelayCell {
 
 impl TorSerde for RelayCell {
     fn bin_serialise_into<W: Write>(&self, mut stream: W) -> torserde::Result<u32> {
-        self.command.bin_serialise_into(stream.borrow_mut())?;
-        self.recognised.bin_serialise_into(stream.borrow_mut())?;
+        let command_length = self.command.bin_serialise_into(stream.borrow_mut())?;
 
-        self.stream_id.bin_serialise_into(stream.borrow_mut())?;
+        let recognised_length = self.recognised.bin_serialise_into(stream.borrow_mut())? ;
 
-        self.digest.bin_serialise_into(stream.borrow_mut())?;
+        let stream_id_length = self.stream_id.bin_serialise_into(stream.borrow_mut())? ;
 
-        self.data.bin_serialise_into(stream.borrow_mut())?;
+        let digest_length = self.digest.bin_serialise_into(stream.borrow_mut())? ;
 
-        std::io::copy(& mut (&self.padding.as_ref().unwrap()[..]), stream.borrow_mut())?;
+        let data_length = self.data.bin_serialise_into(stream.borrow_mut())? ;
+
+        let padding_length = std::io::copy(& mut (&self.padding.as_ref().unwrap()[..]), stream.borrow_mut())? as u32;
+
+        let serialised_length = command_length + recognised_length + stream_id_length + digest_length + data_length + padding_length;
+
+        if serialised_length != 509 {
+            return Err(torserde::ErrorKind::InvalidRelayLength(serialised_length, command_length, recognised_length, stream_id_length, digest_length, data_length, padding_length))
+        }
 
         Ok(509)
     }
@@ -156,11 +165,17 @@ impl TorSerde for RelayCell {
         let digest = u32::bin_deserialise_from(stream.borrow_mut())?;
         let data = <NLengthVector<u8, 2>>::bin_deserialise_from(stream.borrow_mut())?;
 
-        let mut taken = stream.borrow_mut().take((509 - 11 - data.0.len()) as u64);
+        let expected_padding_length = 509 - 11 - data.0.len();
+
+        let mut taken = stream.borrow_mut().take(expected_padding_length as u64);
 
         let mut padding = Vec::new();
 
-        taken.read_to_end(& mut padding)?;
+        let read_padding_length = taken.read_to_end(& mut padding)?;
+
+        if read_padding_length != expected_padding_length {
+            return Err(torserde::ErrorKind::NotEnoughPadding(expected_padding_length, read_padding_length));
+        }
 
         let padding = Some(padding);
 
@@ -184,20 +199,20 @@ impl RelayCell {
     pub fn new(stream_id: u16, contents: Relay) -> Self {
         let recognised = 0;
         let digest = 0;
-        let (command, data) = Self::get_vector(contents);
+        let unpacked = Self::get_vector(contents).unwrap();
 
-        let mut padding: Vec<_> = (0..509-11-data.0.len()).into_iter().map(|_| 0u8).collect();
+        let mut padding: Vec<_> = (0..509-11-unpacked.data_length()).into_iter().map(|_| 0u8).collect();
 
         CSRNG.fill(& mut padding).unwrap();
 
         let padding = Some(padding);
 
         Self {
-            command,
+            command: unpacked.command(),
             recognised,
             stream_id,
             digest,
-            data,
+            data: NLengthVector::<u8, 2>::from(unpacked.data()),
             padding,
         }
     }
@@ -210,32 +225,22 @@ impl RelayCell {
         self.digest
     }
 
-    fn get_vector(relay: Relay) -> (u8, NLengthVector<u8, 2>) {
-        let mut data = Vec::new();
-        //Todo: Create a special object that implements write, that returns the discriminant followed by the data without having to remove from a vector
+    fn get_vector(relay: Relay) -> torserde::Result<UnpackedCell> {
+        let mut unpacked = UnpackedCell::default();
 
-        relay.bin_serialise_into(& mut data);
+        relay.bin_serialise_into(& mut unpacked)?;
 
-        let command = data.remove(0);
-
-        (command, NLengthVector::from(data))
+        Ok(unpacked)
     }
 
-    pub fn get_payload(&self) -> torserde::Result<Option<Relay>> {
+    pub fn get_payload(self) -> torserde::Result<Option<Relay>> {
 
         if self.data.0.is_empty() {
             Ok(None)
         } else {
-            let mut data = self.data.0.clone();
+            let unpacked = UnpackedCell::new(self.command, Some(self.data.0));
 
-            data.insert(0, self.command);
-
-            //Todo: Create a special object that implements read, that returns the discriminant followed by the data without having to prepend a vector
-
-            //Now data contains a discriminant followed by a list of data.
-            //This is exactly what we need to describe an enum
-
-            Ok(Some(Relay::bin_deserialise_from(data.as_slice())?))
+            Ok(Some(Relay::bin_deserialise_from(unpacked)?))
         }
 
     }
@@ -264,19 +269,7 @@ impl Command {
 
 }
 
-struct NullReader;
-
-impl Write for NullReader {
-    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-        std::io::Result::Ok(0)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        std::io::Result::Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TorCell {
     circuit_id: u32,
     payload: Command, //Contains the command, length (optional) and payload
@@ -317,10 +310,12 @@ impl<'a> TorCell {
             509 - (payload.serialised_length() - 1)
         };
 
-        let mut taken = stream.borrow_mut().take(padding_length as u64);
-
-        std::io::copy(& mut taken, & mut NullReader);
-
+        //Discard the remaining padding bytes
+        if padding_length != 0 {
+            let mut taken = stream.borrow_mut().take(padding_length as u64);
+            println!("     padding: {}", padding_length);
+            std::io::copy(&mut taken, &mut crate::misc::NullStream)?;
+        }
 
         Ok(Self {
             circuit_id,

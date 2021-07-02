@@ -13,14 +13,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 #### torserde_macros
 - Clean up macro code, create functions for repeated code
-- Modify macro to use the `repr` attribute and serialise the discriminant accordingly (as u8, u16, etc.)
-- Figure out why `Command` needs Debug, Clone, == and != traits
 
 #### Torserde
 - Rename `NLengthVector` to something less confusing
 
 ### Unfinished Ideas
 None
+
+## [0.1.5] - 2021-07-01
+### Added
+- `torserde::ErrorKind::InvalidRelayLength` error added to show when a serialised cell is not the correct length of 509 bytes
+- misc.rs for particular snippets belonging to no specific branch of Torpedo
+- `misc::UnpackedCell` added to help with the fast serialization and deserialization of `Relay`
+
+### Removed
+- 'Clone' trait from various types
+
+### Fixed
+- `NullReader` renamed to `NullStream` and the `write` function now returns the number of bytes read
 
 ## [0.1.4] - 2021-06-16
 ### Added
