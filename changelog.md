@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Only fetch a new consensus/router data if expired. Otherwise try to use cached data
 - Don't keep allocating memory (via Vec) try to use one global Vec and reuse it for multiple cells
+- Finish `TorCell::try_from_stream` which keeps calling `TorCell::from_stream` until it succeeds
+- Finish the code that ensures that invalid cells are discarded correctly
 
 #### torserde_macros
 - Clean up macro code, create functions for repeated code
@@ -19,6 +21,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Unfinished Ideas
 None
+
+## [0.1.6] - 2021-07-02
+### Added
+- Support for serialising the discriminant as the type specified by the `repr` attribute
+  - `process_attributes` added to torserde_macros to obtain any required attributes form the deriving object
+    - At the moment this only extracts the `repr` attribute, but may be expanded to any other relevant attributes
+  - This means that if, say, `#[repr(u16)]` is specified then it will serialise the discriminant as a u16
+  - Tests have been added for non-u8 repr
+- `Command::is_var_command` determines whether a command (of type `u128` not `Command`) is variable length or not 
+- `torserde::ErrorKind::BadDiscriminant` now returned when an unknown command byte is deserialised from an enum
+- Added implementation of `Torserde` for `u64`
 
 ## [0.1.5] - 2021-07-01
 ### Added

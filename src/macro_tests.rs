@@ -22,6 +22,14 @@ mod macro_tests {
     }
 
     #[derive(Torserde, PartialEq, Eq, Debug)]
+    #[repr(u64)]
+    enum ReprEnum {
+        R1 = 400,
+        R2(u16) = 500,
+        R3{test: String} = 6000,
+    }
+
+    #[derive(Torserde, PartialEq, Eq, Debug)]
     struct InnerList {
         command: u8,
         list: NLengthVector<SimpleStruct, 1>,
@@ -31,6 +39,25 @@ mod macro_tests {
     struct OuterList {
         command: u8,
         list: NLengthVector<InnerList, 1>,
+    }
+
+    #[test]
+
+    fn repr_test() {
+        let mut buff = vec![];
+
+        let en = ReprEnum::R2(5600);
+
+        en.bin_serialise_into(& mut buff);
+
+        assert_eq!(buff, [0, 0, 0, 0, 0, 0, 1, 244, 21, 224]);
+
+        let buff = [0u8, 0, 0, 0, 0, 0, 1, 144];
+
+        let en = ReprEnum::bin_deserialise_from(buff.as_ref()).unwrap();
+
+        assert_eq!(en, ReprEnum::R1);
+
     }
 
     #[test]

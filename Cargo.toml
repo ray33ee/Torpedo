@@ -1,6 +1,6 @@
 [package]
 name = "torpedo"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["ray33ee <30669752+ray33ee@users.noreply.github.com>"]
 edition = "2018"
 

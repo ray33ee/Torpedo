@@ -266,6 +266,11 @@ impl Command {
         self.get_var_len().is_some()
     }
 
+    ///If the command is not recognised (and not serialisable into `Command`) then we get the length of the cell so we can discard it
+    fn is_var_command(command: u8) -> bool {
+        command == 7 || command >= 128
+    }
+
 
 }
 
@@ -288,6 +293,11 @@ impl<'a> TorCell {
         &self.payload
     }
 
+    ///Keep trying `from_stream` until the result is not a Err(DiscardedCell)
+    pub fn try_from_stream<R: Read>(mut stream: R, version: u32) -> torserde::Result<Self> {
+        todo!()
+    }
+
     pub fn from_stream<R: Read>(mut stream: R, version: u32) -> torserde::Result<Self> {
         let circuit_id = if version < 4 {
             u16::bin_deserialise_from(stream.borrow_mut())? as u32
@@ -298,29 +308,52 @@ impl<'a> TorCell {
         //Deserialise the command, then use that to get the rest of the cell into a buffer, then deserialise the buffer
         //This means that even if a deserialisation stops mid way, we still have removed the cell from the stream
 
-        let payload = Command::bin_deserialise_from(stream.borrow_mut())?;
+        match Command::bin_deserialise_from(stream.borrow_mut()) {
+            Ok(payload) => {
+                let padding_length =  if let Some(length) = payload.get_var_len() {
+                    if length > payload.serialised_length() - 1 {
+                        length - (payload.serialised_length() - 1)
+                    } else {
+                        0
+                    }
+                } else {
+                    509 - (payload.serialised_length() - 1)
+                };
 
-        let padding_length =  if let Some(length) = payload.get_var_len() {
-            if length > payload.serialised_length() - 1 {
-                length - (payload.serialised_length() - 1)
-            } else {
-                0
+                //Discard the remaining padding bytes
+                if padding_length != 0 {
+                    let mut taken = stream.borrow_mut().take(padding_length as u64);
+                    println!("     padding: {}", padding_length);
+                    std::io::copy(&mut taken, &mut crate::misc::NullStream)?;
+                }
+
+                Ok(Self {
+                    circuit_id,
+                    payload
+                })
+            },
+            Err(kind) => match kind {
+                torserde::ErrorKind::BadDiscriminant(discriminant) => {
+
+                    let bytes_left_in_cell = if Command::is_var_command(discriminant as u8) {
+                        todo!()
+                        //Serialise the next few bytes to get the length
+                    } else {
+                        509
+                    };
+
+                    //Discard `bytes_left_in_cell` bytes from stream
+
+
+
+                    Err(torserde::ErrorKind::DiscardedCell(discriminant))
+                },
+                _ => Err(kind)
             }
-        } else {
-            509 - (payload.serialised_length() - 1)
-        };
-
-        //Discard the remaining padding bytes
-        if padding_length != 0 {
-            let mut taken = stream.borrow_mut().take(padding_length as u64);
-            println!("     padding: {}", padding_length);
-            std::io::copy(&mut taken, &mut crate::misc::NullStream)?;
         }
 
-        Ok(Self {
-            circuit_id,
-            payload
-        })
+
+
     }
 
     pub fn into_stream<W: Write>(self, mut stream: W, version: u32) -> torserde::Result<()> {
